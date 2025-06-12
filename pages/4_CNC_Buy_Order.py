@@ -1,27 +1,22 @@
 import streamlit as st
-from integrate import ConnectToIntegrate, IntegrateOrders
 import math
 import requests
+from integrate import ConnectToIntegrate, IntegrateOrders
+
+# --- LOGIN BLOCK ---
+api_token = st.secrets["integrate_api_token"]
+api_secret = st.secrets["integrate_api_secret"]
+uid = st.secrets["integrate_uid"]
+actid = st.secrets["integrate_actid"]
+api_session_key = st.secrets["integrate_api_session_key"]
+ws_session_key = st.secrets["integrate_ws_session_key"]
+
+conn = ConnectToIntegrate()
+conn.login(api_token, api_secret)
+conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
+io = IntegrateOrders(conn)
 
 st.title("CNC Buy Order")
-
-def get_credentials():
-    secrets = st.secrets
-    return (
-        secrets["integrate_api_token"],
-        secrets["integrate_api_secret"],
-        secrets["integrate_uid"],
-        secrets["integrate_actid"],
-        secrets["integrate_api_session_key"],
-        secrets["integrate_ws_session_key"],
-    )
-
-def get_io():
-    api_token, api_secret, uid, actid, api_session_key, ws_session_key = get_credentials()
-    conn = ConnectToIntegrate()
-    conn.login(api_token, api_secret)
-    conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
-    return conn, IntegrateOrders(conn)
 
 ORDER_PARAMS = dict(
     tradingsymbol="HPL-EQ",
@@ -35,7 +30,7 @@ ORDER_PARAMS = dict(
     validity="DAY"
 )
 
-def fetch_ltp(exchange, tradingsymbol, api_session_key):
+def fetch_ltp(exchange, tradingsymbol):
     symbol_token_map = {
         "TEXRAIL-EQ": "5489",
         "SBIN-EQ": "3045",
@@ -55,7 +50,6 @@ def fetch_ltp(exchange, tradingsymbol, api_session_key):
         pass
     return None
 
-conn, io = get_io()
 params = ORDER_PARAMS.copy()
 with st.form("order_form"):
     tradingsymbol = st.text_input("Symbol", value=params["tradingsymbol"])
@@ -85,7 +79,7 @@ with st.form("order_form"):
             if params["price_type"] == "LIMIT" and use_price > 0:
                 pass
             else:
-                ltp = fetch_ltp(params["exchange"], params["tradingsymbol"], st.secrets["integrate_api_session_key"])
+                ltp = fetch_ltp(params["exchange"], params["tradingsymbol"])
                 use_price = ltp if ltp else use_price
             if use_price:
                 final_qty = math.floor(params["amount"] / use_price)
