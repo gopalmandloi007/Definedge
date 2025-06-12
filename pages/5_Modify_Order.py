@@ -1,27 +1,21 @@
 import streamlit as st
 from integrate import ConnectToIntegrate, IntegrateOrders
 
+# --- LOGIN BLOCK ---
+api_token = st.secrets["integrate_api_token"]
+api_secret = st.secrets["integrate_api_secret"]
+uid = st.secrets["integrate_uid"]
+actid = st.secrets["integrate_actid"]
+api_session_key = st.secrets["integrate_api_session_key"]
+ws_session_key = st.secrets["integrate_ws_session_key"]
+
+conn = ConnectToIntegrate()
+conn.login(api_token, api_secret)
+conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
+io = IntegrateOrders(conn)
+
 st.title("Modify Existing Order")
 
-def get_credentials():
-    secrets = st.secrets
-    return (
-        secrets["integrate_api_token"],
-        secrets["integrate_api_secret"],
-        secrets["integrate_uid"],
-        secrets["integrate_actid"],
-        secrets["integrate_api_session_key"],
-        secrets["integrate_ws_session_key"],
-    )
-
-def get_io():
-    api_token, api_secret, uid, actid, api_session_key, ws_session_key = get_credentials()
-    conn = ConnectToIntegrate()
-    conn.login(api_token, api_secret)
-    conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
-    return conn, IntegrateOrders(conn)
-
-conn, io = get_io()
 with st.form("modify_order_form"):
     order_id = st.text_input("Order ID", value="25060300007644")
     price = st.number_input("New Price", value=1905.0)
