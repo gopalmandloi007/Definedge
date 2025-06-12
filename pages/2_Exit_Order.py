@@ -38,8 +38,15 @@ def place_sell_order(data):
         headers={**get_headers(), "Content-Type": "application/json"},
         json=data
     )
-    response.raise_for_status()
-    return response.json()
+    try:
+        json_resp = response.json()
+    except Exception:
+        json_resp = None
+    return {
+        "status_code": response.status_code,
+        "raw_text": response.text,
+        "json": json_resp
+    }
 
 def flatten_holdings(raw_holdings):
     flat = []
@@ -118,15 +125,20 @@ if tab == "Holdings (NSE only)":
                             "order_type": "SELL",
                             "quantity": str(qty),
                             "product_type": "CNC",
-                            "price_type": order_type,
+                            "price_type": order_type.upper(),
                             "validity": "DAY",
                             "disclosed_quantity": "0",
                             "price": str(price) if order_type == "LIMIT" else "0",
                             "remarks": remarks,
                         }
+                        st.info("Outgoing Order Payload:")
+                        st.json(order)
                         try:
                             result = place_sell_order(order)
-                            st.success(f"Order placement result: {result}")
+                            st.success("Order API response below:")
+                            st.json(result)
+                            if not (isinstance(result.get("json"), dict) and ("order_id" in result.get("json", {}) or "status" in result.get("json", {}))):
+                                st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
                         except Exception as e:
                             st.error(f"Failed to place order: {e}")
 
@@ -170,14 +182,19 @@ elif tab == "Positions":
                             "order_type": "SELL",
                             "quantity": str(qty),
                             "product_type": prd,
-                            "price_type": order_type,
+                            "price_type": order_type.upper(),
                             "validity": "DAY",
                             "disclosed_quantity": "0",
                             "price": str(price) if order_type == "LIMIT" else "0",
                             "remarks": remarks,
                         }
+                        st.info("Outgoing Order Payload:")
+                        st.json(order)
                         try:
                             result = place_sell_order(order)
-                            st.success(f"Order placement result: {result}")
+                            st.success("Order API response below:")
+                            st.json(result)
+                            if not (isinstance(result.get("json"), dict) and ("order_id" in result.get("json", {}) or "status" in result.get("json", {}))):
+                                st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
                         except Exception as e:
                             st.error(f"Failed to place order: {e}")
