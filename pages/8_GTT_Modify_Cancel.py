@@ -1,14 +1,25 @@
 import streamlit as st
 import requests
-from integrate import ConnectToIntegrate
+from integrate import ConnectToIntegrate, IntegrateOrders
+
+# --- LOGIN BLOCK ---
+api_token = st.secrets["integrate_api_token"]
+api_secret = st.secrets["integrate_api_secret"]
+uid = st.secrets["integrate_uid"]
+actid = st.secrets["integrate_actid"]
+api_session_key = st.secrets["integrate_api_session_key"]
+ws_session_key = st.secrets["integrate_ws_session_key"]
+
+conn = ConnectToIntegrate()
+conn.login(api_token, api_secret)
+conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
+io = IntegrateOrders(conn)
 
 st.title("GTT OCO/Single Modify & Cancel")
 
-def get_headers():
-    session_key = st.secrets["integrate_api_session_key"]
-    return {"Authorization": session_key}
-
 BASE_URL = "https://integrate.definedgesecurities.com/dart/v1"
+def get_headers():
+    return {"Authorization": api_session_key}
 
 @st.cache_data
 def fetch_gtt_orders():
@@ -27,7 +38,7 @@ orders = fetch_gtt_orders()
 if not orders:
     st.info("No GTT orders found.")
 else:
-    df = st.dataframe(orders)
+    st.dataframe(orders)
     idx = st.number_input("Select order number to modify/cancel (1-based)", min_value=1, max_value=len(orders))
     selected = orders[int(idx)-1]
     st.json(selected)
