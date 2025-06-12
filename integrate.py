@@ -3,7 +3,7 @@ import requests
 class ConnectToIntegrate:
     BASE_URL = "https://integrate.definedgesecurities.com/dart/v1"
 
-    # Constants for order types etc., for convenience in Streamlit pages
+    # Useful constants for order types, exchanges, etc.
     EXCHANGE_TYPE_NSE = "NSE"
     EXCHANGE_TYPE_BSE = "BSE"
     ORDER_TYPE_BUY = "BUY"
@@ -30,6 +30,9 @@ class ConnectToIntegrate:
         self.actid = actid
         self.api_session_key = api_session_key
         self.ws_session_key = ws_session_key
+
+    def get_session_keys(self):
+        return (self.uid, self.actid, self.api_session_key, self.ws_session_key)
 
     @property
     def headers(self):
@@ -70,7 +73,10 @@ class IntegrateOrders:
         return resp.json()
 
     def trade_book(self):
-        url = f"{self.conn.BASE_URL}/tradebook"
+        """
+        Return the trade book. Uses '/trades' endpoint (not '/tradebook')!
+        """
+        url = f"{self.conn.BASE_URL}/trades"
         resp = requests.get(url, headers=self.conn.headers)
         resp.raise_for_status()
         return resp.json()
@@ -137,4 +143,27 @@ class IntegrateOrders:
         resp.raise_for_status()
         return resp.json()
 
-    # You can add more methods here as needed for other endpoints!
+    # --- Optional: Add GTT Modify/Cancel/OCO Modify/Cancel methods if required ---
+    def modify_gtt_order(self, data):
+        url = f"{self.conn.BASE_URL}/gttmodify"
+        resp = requests.post(url, headers={**self.conn.headers, "Content-Type": "application/json"}, json=data)
+        resp.raise_for_status()
+        return resp.json()
+
+    def modify_oco_order(self, data):
+        url = f"{self.conn.BASE_URL}/ocomodify"
+        resp = requests.post(url, headers={**self.conn.headers, "Content-Type": "application/json"}, json=data)
+        resp.raise_for_status()
+        return resp.json()
+
+    def cancel_gtt_order(self, alert_id):
+        url = f"{self.conn.BASE_URL}/gttcancel/{alert_id}"
+        resp = requests.get(url, headers=self.conn.headers)
+        resp.raise_for_status()
+        return resp.json()
+
+    def cancel_oco_order(self, alert_id):
+        url = f"{self.conn.BASE_URL}/ococancel/{alert_id}"
+        resp = requests.get(url, headers=self.conn.headers)
+        resp.raise_for_status()
+        return resp.json()
