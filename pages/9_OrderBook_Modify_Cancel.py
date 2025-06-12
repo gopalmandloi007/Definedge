@@ -1,14 +1,27 @@
 import streamlit as st
 import requests
-from tabulate import tabulate
+
+# --- LOGIN BLOCK ---
+from integrate import ConnectToIntegrate, IntegrateOrders
+
+api_token = st.secrets["integrate_api_token"]
+api_secret = st.secrets["integrate_api_secret"]
+uid = st.secrets["integrate_uid"]
+actid = st.secrets["integrate_actid"]
+api_session_key = st.secrets["integrate_api_session_key"]
+ws_session_key = st.secrets["integrate_ws_session_key"]
+
+conn = ConnectToIntegrate()
+conn.login(api_token, api_secret)
+conn.set_session_keys(uid, actid, api_session_key, ws_session_key)
+io = IntegrateOrders(conn)
 
 st.title("Modify / Cancel Order from Order Book")
 
 BASE_URL = "https://integrate.definedgesecurities.com/dart/v1"
 
 def get_headers():
-    session_key = st.secrets["integrate_api_session_key"]
-    return {"Authorization": session_key}
+    return {"Authorization": api_session_key}
 
 def fetch_order_book():
     url = f"{BASE_URL}/orders"
