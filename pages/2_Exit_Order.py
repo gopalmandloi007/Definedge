@@ -78,81 +78,106 @@ def flatten_positions(raw_positions):
 st.set_page_config(page_title="Exit Order", layout="wide")
 st.title("Exit Direct from Holding / Position")
 
-# Fetch data
-try:
-    holdings_resp = fetch_holdings()
-    raw_holdings = holdings_resp.get("data", []) if isinstance(holdings_resp, dict) else []
-    holdings = flatten_holdings(raw_holdings)
-except Exception as e:
-    st.error(f"Failed to fetch holdings: {e}")
-    holdings = []
-
-try:
-    positions_resp = fetch_positions()
-    raw_positions = positions_resp.get("positions", []) if isinstance(positions_resp, dict) else []
-    positions = flatten_positions(raw_positions)
-except Exception as e:
-    st.error(f"Failed to fetch positions: {e}")
-    positions = []
-
 tab = st.radio("Choose source for SELL order:", ["Holdings (NSE only)", "Positions"])
 
 if tab == "Holdings (NSE only)":
+    try:
+        holdings_resp = fetch_holdings()
+        raw_holdings = holdings_resp.get("data", []) if isinstance(holdings_resp, dict) else []
+        holdings = flatten_holdings(raw_holdings)
+    except Exception as e:
+        st.error(f"Failed to fetch holdings: {e}")
+        holdings = []
     df = pd.DataFrame(holdings)
-    st.dataframe(df)
-    if len(df) > 0:
-        idx = st.selectbox("Select holding to SELL", range(len(df)), format_func=lambda i: f"{df.iloc[i]['tradingsymbol']} ({df.iloc[i]['dp_qty']})")
-        selected = df.iloc[idx]
-        max_qty = int(float(selected["dp_qty"]))
-        ltp = fetch_ltp(selected["exchange"], selected["token"])
-        prd = "CNC"
-    else:
+    if len(df) == 0:
         st.warning("No holdings available.")
         st.stop()
-else:
-    df = pd.DataFrame(positions)
     st.dataframe(df)
-    if len(df) > 0:
-        idx = st.selectbox("Select position to SELL", range(len(df)), format_func=lambda i: f"{df.iloc[i]['tradingsymbol']} ({df.iloc[i]['net_quantity']})")
-        selected = df.iloc[idx]
-        max_qty = abs(int(float(selected["net_quantity"])))
-        ltp = fetch_ltp(selected["exchange"], selected["token"])
-        prd = selected["product_type"]
-    else:
+    for i, row in df.iterrows():
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(
+                f"**{row['tradingsymbol']}** | Qty: {row['dp_qty']} | Avg Price: {row['avg_buy_price']}"
+            )
+        with col2:
+            if st.button(f"Exit ({row['tradingsymbol']})", key=f"exit_h_{i}"):
+                with st.form(f"form_exit_h_{i}", clear_on_submit=True):
+                    ltp = fetch_ltp(row["exchange"], row["token"])
+                    qty = st.number_input("Enter quantity to SELL", min_value=1, max_value=int(float(row["dp_qty"])), value=int(float(row["dp_qty"])), key=f"qty_h_{i}")
+                    order_type = st.selectbox("Order type", ["LIMIT", "MARKET"], key=f"ordertype_h_{i}")
+                    price = "0"
+                    if order_type == "LIMIT":
+                        st.info(f"LTP (Last Traded Price): {ltp}")
+                        price = st.text_input("Enter LIMIT price", value=str(ltp), key=f"price_h_{i}")
+                    remarks = st.text_input("Remarks (optional)", key=f"remarks_h_{i}")
+                    submitted = st.form_submit_button("Place this SELL order")
+                    if submitted:
+                        order = {
+                            "tradingsymbol": str(row["tradingsymbol"]),
+                            "exchange": str(row["exchange"]),
+                            "order_type": "SELL",
+                            "quantity": str(qty),
+                            "product_type": "CNC",
+                            "price_type": order_type,
+                            "validity": "DAY",
+                            "disclosed_quantity": "0",
+                            "price": str(price) if order_type == "LIMIT" else "0",
+                            "remarks": remarks,
+                        }
+                        try:
+                            result = place_sell_order(order)
+                            st.success(f"Order placement result: {result}")
+                        except Exception as e:
+                            st.error(f"Failed to place order: {e}")
+
+elif tab == "Positions":
+    try:
+        positions_resp = fetch_positions()
+        raw_positions = positions_resp.get("positions", []) if isinstance(positions_resp, dict) else []
+        positions = flatten_positions(raw_positions)
+    except Exception as e:
+        st.error(f"Failed to fetch positions: {e}")
+        positions = []
+    df = pd.DataFrame(positions)
+    if len(df) == 0:
         st.warning("No positions available.")
         st.stop()
-
-qty = st.number_input("Enter quantity to SELL", min_value=1, max_value=max_qty, value=max_qty)
-order_type = st.selectbox("Order type", ["LIMIT", "MARKET"])
-price = "0"
-if order_type == "LIMIT":
-    st.info(f"LTP (Last Traded Price): {ltp}")
-    price = st.text_input("Enter LIMIT price", value=str(ltp))
-remarks = st.text_input("Remarks (optional)")
-
-order = {
-    "tradingsymbol": str(selected["tradingsymbol"]),
-    "exchange": str(selected["exchange"]),
-    "order_type": "SELL",
-    "quantity": str(qty),
-    "product_type": prd,
-    "price_type": order_type,
-    "validity": "DAY",
-    "disclosed_quantity": "0",
-    "price": str(price) if order_type == "LIMIT" else "0",
-    "remarks": remarks,
-}
-
-if order_type in ("SL-LIMIT", "SL-MARKET"):
-    trigger_price = st.text_input("Enter Trigger Price for Stoploss order")
-    order["trigger_price"] = str(trigger_price)
-
-st.subheader("Order details (payload to API):")
-st.json(order)
-
-if st.button("Place this SELL order"):
-    try:
-        result = place_sell_order(order)
-        st.success(f"Order placement result: {result}")
-    except Exception as e:
-        st.error(f"Failed to place order: {e}")
+    st.dataframe(df)
+    for i, row in df.iterrows():
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(
+                f"**{row['tradingsymbol']}** | Qty: {row['net_quantity']} | Avg Price: {row['net_averageprice']}"
+            )
+        with col2:
+            if st.button(f"Exit ({row['tradingsymbol']})", key=f"exit_p_{i}"):
+                with st.form(f"form_exit_p_{i}", clear_on_submit=True):
+                    ltp = fetch_ltp(row["exchange"], row["token"])
+                    max_qty = abs(int(float(row["net_quantity"])))
+                    prd = row["product_type"]
+                    qty = st.number_input("Enter quantity to SELL", min_value=1, max_value=max_qty, value=max_qty, key=f"qty_p_{i}")
+                    order_type = st.selectbox("Order type", ["LIMIT", "MARKET"], key=f"ordertype_p_{i}")
+                    price = "0"
+                    if order_type == "LIMIT":
+                        st.info(f"LTP (Last Traded Price): {ltp}")
+                        price = st.text_input("Enter LIMIT price", value=str(ltp), key=f"price_p_{i}")
+                    remarks = st.text_input("Remarks (optional)", key=f"remarks_p_{i}")
+                    submitted = st.form_submit_button("Place this SELL order")
+                    if submitted:
+                        order = {
+                            "tradingsymbol": str(row["tradingsymbol"]),
+                            "exchange": str(row["exchange"]),
+                            "order_type": "SELL",
+                            "quantity": str(qty),
+                            "product_type": prd,
+                            "price_type": order_type,
+                            "validity": "DAY",
+                            "disclosed_quantity": "0",
+                            "price": str(price) if order_type == "LIMIT" else "0",
+                            "remarks": remarks,
+                        }
+                        try:
+                            result = place_sell_order(order)
+                            st.success(f"Order placement result: {result}")
+                        except Exception as e:
+                            st.error(f"Failed to place order: {e}")
