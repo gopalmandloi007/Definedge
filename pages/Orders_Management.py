@@ -19,22 +19,20 @@ io = IntegrateOrders(conn)
 BASE_URL = "https://integrate.definedgesecurities.com/dart/v1"
 HEADERS = {"Authorization": api_session_key}
 
-st.set_page_config(page_title="Orders & GTT Management", layout="wide")
-st.title("Orders & GTT: Place, Modify, Cancel, and GTT Management")
+st.set_page_config(page_title="Order/GTT Dashboard", layout="wide")
+st.title("Order & GTT Full Dashboard")
 
-# --- Sidebar Navigation ---
-menu = st.sidebar.radio("Choose Action", [
-    "CNC Buy/Sell Order",
-    "Modify Existing Order",
-    "Place Single GTT Order",
-    "Place OCO GTT Order",
-    "GTT OCO/Single View-Modify-Cancel"
+tabs = st.tabs([
+    "Place CNC Order",
+    "Modify/Cancel Orders",
+    "Place GTT (Single/OCO)",
+    "GTT Book/Modify/Cancel"
 ])
 
-# --- 1. CNC BUY/SELL ORDER ---
-if menu == "CNC Buy/Sell Order":
-    st.header("Place New CNC Buy/Sell Order")
-    with st.form("cnc_order_form"):
+# --- 1. Place CNC BUY/SELL ORDER ---
+with tabs[0]:
+    st.subheader("Place New CNC Buy/Sell Order")
+    with st.form("cnc_order_form", clear_on_submit=True):
         tradingsymbol = st.text_input("Symbol (e.g. SBIN-EQ)", value="HPL-EQ")
         side = st.selectbox("Order Side", ["BUY", "SELL"])
         quantity = st.number_input("Quantity (set 0 if using amount)", min_value=0, value=0, step=1)
@@ -48,14 +46,10 @@ if menu == "CNC Buy/Sell Order":
         submitted = st.form_submit_button("Place Order")
         if submitted:
             try:
-                # If user uses amount, calculate qty
                 use_amount = amount > 0
                 use_price = price if price_type == "LIMIT" and price > 0 else None
-
-                # LTP fetch (optional, only for market/amount orders)
                 ltp = None
                 if use_amount and (use_price is None or use_price == 0):
-                    # Optional: Token mapping; adapt this logic for production
                     token_map = {"TEXRAIL-EQ": "5489", "SBIN-EQ": "3045"}
                     token = token_map.get(tradingsymbol)
                     if token:
@@ -85,98 +79,118 @@ if menu == "CNC Buy/Sell Order":
             except Exception as e:
                 st.error(f"Order Placement Failed: {e}")
 
-# --- 2. MODIFY EXISTING ORDER ---
-elif menu == "Modify Existing Order":
-    st.header("Modify Existing Order")
-    with st.form("modify_order_form"):
-        order_id = st.text_input("Order ID")
-        tradingsymbol = st.text_input("Symbol", value="BDL-EQ")
-        price = st.number_input("New Price", value=0.0)
-        quantity = st.number_input("New Quantity", value=0, step=1)
-        price_type = st.selectbox("Price Type", ["LIMIT", "MARKET"])
-        exchange = st.selectbox("Exchange", ["NSE", "BSE"])
-        order_type = st.selectbox("Order Side", ["BUY", "SELL"])
-        product_type = st.selectbox("Product Type", ["CNC", "MIS"])
-        submitted = st.form_submit_button("Modify Order")
-        if submitted:
-            try:
-                modify_kwargs = dict(
-                    order_id=order_id,
-                    price=price,
-                    quantity=quantity,
-                    price_type=conn.PRICE_TYPE_LIMIT if price_type == "LIMIT" else conn.PRICE_TYPE_MARKET,
-                    exchange=conn.EXCHANGE_TYPE_NSE if exchange == "NSE" else conn.EXCHANGE_TYPE_BSE,
-                    order_type=conn.ORDER_TYPE_BUY if order_type == "BUY" else conn.ORDER_TYPE_SELL,
-                    product_type=conn.PRODUCT_TYPE_CNC if product_type == "CNC" else conn.PRODUCT_TYPE_MIS,
-                    tradingsymbol=tradingsymbol,
-                )
-                resp = io.modify_order(**modify_kwargs)
-                st.success(f"Order Modified! Response: {resp}")
-            except Exception as e:
-                st.error(f"Order modification failed: {e}")
+# --- 2. MODIFY/CANCEL EXISTING ORDERS (Order Book) ---
+with tabs[1]:
+    st.subheader("Live Order Book (Modify/Cancel)")
+    try:
+        # Fetch order book via REST if available, else via io
+        r = requests.get(f"{BASE_URL}/orders", headers=HEADERS)
+        r.raise_for_status()
+        data = r.json()
+        orders = data.get("orders", [])
+        if not orders:
+            st.info("No orders found.")
+        else:
+            df = []
+            for o in orders:
+                df.append({k: o.get(k, "") for k in [
+                    "order_id", "tradingsymbol", "exchange", "order_type", "price_type", "product_type",
+                    "quantity", "pending_qty", "filled_qty", "price", "order_status", "order_entry_time"
+                ]})
+            st.dataframe(df, use_container_width=True)
+            for i, o in enumerate(orders):
+                exp = st.expander(f"{o.get('tradingsymbol')} | {o.get('order_id')} | {o.get('order_status')}")
+                with exp:
+                    st.json(o)
+                    col1, col2 = st.columns(2)
+                    if st.session_state.get(f"modify_{i}", False):
+                        with st.form(f"form_mod_{i}", clear_on_submit=True):
+                            new_price = st.number_input("New Price", value=float(o.get("price", 0)), key=f"price_{i}")
+                            new_qty = st.number_input("New Qty", value=int(o.get("quantity", 0)), key=f"qty_{i}")
+                            submitted = st.form_submit_button("Modify")
+                            if submitted:
+                                try:
+                                    kwargs = dict(
+                                        order_id=o.get("order_id"),
+                                        price=new_price,
+                                        quantity=new_qty,
+                                        price_type=o.get("price_type"),
+                                        exchange=o.get("exchange"),
+                                        order_type=o.get("order_type"),
+                                        product_type=o.get("product_type"),
+                                        tradingsymbol=o.get("tradingsymbol"),
+                                    )
+                                    resp = io.modify_order(**kwargs)
+                                    st.success(f"Order Modified: {resp}")
+                                except Exception as e:
+                                    st.error(f"Failed: {e}")
+                                st.session_state[f"modify_{i}"] = False
+                        if st.button("Close", key=f"close_mod_{i}"):
+                            st.session_state[f"modify_{i}"] = False
+                    else:
+                        if col1.button("Modify", key=f"modifybtn_{i}"):
+                            st.session_state[f"modify_{i}"] = True
+                        if col2.button("Cancel", key=f"cancelbtn_{i}"):
+                            try:
+                                resp = io.cancel_order(order_id=o.get("order_id"))
+                                st.success(f"Order Cancelled: {resp}")
+                            except Exception as e:
+                                st.error(f"Cancel failed: {e}")
 
-# --- 3. PLACE SINGLE GTT ORDER ---
-elif menu == "Place Single GTT Order":
-    st.header("Place Single GTT Order")
-    with st.form("single_gtt_form"):
-        tradingsymbol = st.text_input("Symbol", value="BDL-EQ")
-        exchange = st.selectbox("Exchange", ["NSE", "BSE"])
-        order_type = st.selectbox("Order Type", ["BUY", "SELL"])
-        quantity = st.number_input("Quantity", value=1, step=1)
-        trigger_price = st.number_input("Trigger Price", value=1850.0)
-        price = st.number_input("Order Price", value=1855.0)
-        remarks = st.text_input("Remarks", value="Single GTT via API")
-        submitted = st.form_submit_button("Place Single GTT")
-        if submitted:
-            try:
-                order_kwargs = dict(
-                    tradingsymbol=tradingsymbol,
-                    exchange=conn.EXCHANGE_TYPE_NSE if exchange == "NSE" else conn.EXCHANGE_TYPE_BSE,
-                    order_type=conn.ORDER_TYPE_SELL if order_type == "SELL" else conn.ORDER_TYPE_BUY,
-                    quantity=str(quantity),
-                    alert_price=str(trigger_price),
-                    price=str(price),
-                    condition="LTP_BELOW"  # Or as your API expects
-                )
-                resp = io.place_gtt_order(**order_kwargs)
-                st.success(f"Single GTT Order Placed! Response: {resp}")
-            except Exception as e:
-                st.error(f"Single GTT placement failed: {e}")
+    except Exception as e:
+        st.error(f"Failed to fetch order book: {e}")
 
-# --- 4. PLACE OCO GTT ORDER ---
-elif menu == "Place OCO GTT Order":
-    st.header("Place OCO GTT Order")
-    with st.form("oco_gtt_form"):
+# --- 3. PLACE SINGLE/OCO GTT ---
+with tabs[2]:
+    st.subheader("Place GTT (Single/OCO)")
+    t = st.radio("Type", ["Single", "OCO"])
+    with st.form("gtt_form", clear_on_submit=True):
         tradingsymbol = st.text_input("Symbol", value="MRPL-EQ")
         exchange = st.selectbox("Exchange", ["NSE", "BSE"])
         order_type = st.selectbox("Order Type", ["BUY", "SELL"])
-        target_quantity = st.number_input("Target Quantity", value=93, step=1)
-        stoploss_quantity = st.number_input("Stoploss Quantity", value=371, step=1)
-        target_price = st.number_input("Target Price", value=164.0)
-        stoploss_price = st.number_input("Stoploss Price", value=144.0)
-        remarks = st.text_input("Remarks", value="OCO GTT via API")
-        submitted = st.form_submit_button("Place OCO GTT")
+        quantity = st.number_input("Quantity", value=1, step=1)
+        remarks = st.text_input("Remarks", value="GTT via API")
+        if t == "Single":
+            trigger_price = st.number_input("Trigger Price", value=1850.0)
+            price = st.number_input("Order Price", value=1855.0)
+        else:
+            target_quantity = st.number_input("Target Quantity", value=93, step=1)
+            stoploss_quantity = st.number_input("Stoploss Quantity", value=371, step=1)
+            target_price = st.number_input("Target Price", value=164.0)
+            stoploss_price = st.number_input("Stoploss Price", value=144.0)
+        submitted = st.form_submit_button("Place GTT")
         if submitted:
             try:
-                order_kwargs = dict(
-                    tradingsymbol=tradingsymbol,
-                    exchange=conn.EXCHANGE_TYPE_NSE if exchange == "NSE" else conn.EXCHANGE_TYPE_BSE,
-                    order_type=conn.ORDER_TYPE_SELL if order_type == "SELL" else conn.ORDER_TYPE_BUY,
-                    target_quantity=str(target_quantity),
-                    stoploss_quantity=str(stoploss_quantity),
-                    target_price=str(target_price),
-                    stoploss_price=str(stoploss_price),
-                    remarks=remarks
-                )
-                resp = io.place_oco_order(**order_kwargs)
-                st.success(f"OCO GTT Order Placed! Response: {resp}")
+                if t == "Single":
+                    kwargs = dict(
+                        tradingsymbol=tradingsymbol,
+                        exchange=conn.EXCHANGE_TYPE_NSE if exchange == "NSE" else conn.EXCHANGE_TYPE_BSE,
+                        order_type=conn.ORDER_TYPE_SELL if order_type == "SELL" else conn.ORDER_TYPE_BUY,
+                        quantity=str(quantity),
+                        alert_price=str(trigger_price),
+                        price=str(price),
+                        condition="LTP_BELOW"
+                    )
+                    resp = io.place_gtt_order(**kwargs)
+                else:
+                    kwargs = dict(
+                        tradingsymbol=tradingsymbol,
+                        exchange=conn.EXCHANGE_TYPE_NSE if exchange == "NSE" else conn.EXCHANGE_TYPE_BSE,
+                        order_type=conn.ORDER_TYPE_SELL if order_type == "SELL" else conn.ORDER_TYPE_BUY,
+                        target_quantity=str(target_quantity),
+                        stoploss_quantity=str(stoploss_quantity),
+                        target_price=str(target_price),
+                        stoploss_price=str(stoploss_price),
+                        remarks=remarks
+                    )
+                    resp = io.place_oco_order(**kwargs)
+                st.success(f"GTT Placed: {resp}")
             except Exception as e:
-                st.error(f"OCO GTT placement failed: {e}")
+                st.error(f"GTT failed: {e}")
 
-# --- 5. GTT OCO/SINGLE VIEW-MODIFY-CANCEL ---
-elif menu == "GTT OCO/Single View-Modify-Cancel":
-    st.header("GTT OCO/Single: View, Modify, Cancel Orders")
-    # 1. Fetch all GTT orders
+# --- 4. GTT Book/Modify/Cancel ---
+with tabs[3]:
+    st.subheader("GTT Book: View/Modify/Cancel")
     try:
         r = requests.get(f"{BASE_URL}/gttorders", headers=HEADERS)
         r.raise_for_status()
@@ -191,65 +205,63 @@ elif menu == "GTT OCO/Single View-Modify-Cancel":
                     "alert_id", "tradingsymbol", "exchange", "order_type", "product_type", "quantity", "price", "trigger_price",
                     "target_price", "target_quantity", "stoploss_price", "stoploss_quantity", "remarks", "order_time"
                 ]})
-            st.dataframe(df)
-            idx = st.number_input("Select order number to modify/cancel (1-based)", min_value=1, max_value=len(orders))
-            selected = orders[int(idx)-1]
-            st.json(selected)
-            action = st.selectbox("Action", options=["Modify", "Cancel"])
-            if action == "Cancel":
-                if st.button("Cancel Order"):
-                    alert_id = selected.get("alert_id")
-                    is_oco = any([selected.get(f) for f in ("stoploss_price", "stoploss_trigger", "target_price", "target_trigger")])
-                    if is_oco:
-                        url = f"{BASE_URL}/ococancel/{alert_id}"
-                    else:
-                        url = f"{BASE_URL}/gttcancel/{alert_id}"
-                    resp = requests.get(url, headers=HEADERS)
-                    st.write(resp.json())
-            if action == "Modify":
-                is_oco = any([selected.get(f) for f in ("stoploss_price", "stoploss_trigger", "target_price", "target_trigger")])
-                if is_oco:
-                    st.write("OCO Order Modification")
-                    new_target_trigger = st.text_input("Target Trigger", value=str(selected.get('target_trigger', '')))
-                    new_target_price = st.text_input("Target Price", value=str(selected.get('target_price', '')))
-                    new_stoploss_trigger = st.text_input("Stoploss Trigger", value=str(selected.get('stoploss_trigger', '')))
-                    new_stoploss_price = st.text_input("Stoploss Price", value=str(selected.get('stoploss_price', '')))
-                    new_target_qty = st.text_input("Target Qty", value=str(selected.get('target_quantity', '')))
-                    new_stoploss_qty = st.text_input("Stoploss Qty", value=str(selected.get('stoploss_quantity', '')))
-                    if st.button("Modify OCO"):
-                        data = {
-                            "tradingsymbol": selected.get("tradingsymbol"),
-                            "exchange": selected.get("exchange"),
-                            "order_type": selected.get("order_type"),
-                            "target_quantity": new_target_qty,
-                            "stoploss_quantity": new_stoploss_qty,
-                            "target_price": new_target_price,
-                            "stoploss_price": new_stoploss_price,
-                            "alert_id": selected.get("alert_id"),
-                            "remarks": "modified by Streamlit",
-                            "product_type": selected.get("product_type", "CNC"),
-                        }
-                        url = f"{BASE_URL}/ocomodify"
-                        resp = requests.post(url, headers={**HEADERS, "Content-Type": "application/json"}, json=data)
-                        st.write(resp.json())
-                else:
-                    st.write("Single GTT Order Modification")
-                    new_trigger = st.text_input("Trigger Price", value=str(selected.get('trigger_price', '')))
-                    new_price = st.text_input("Order Price", value=str(selected.get('price', '')))
-                    new_qty = st.text_input("Quantity", value=str(selected.get('quantity', '')))
-                    if st.button("Modify GTT"):
-                        data = {
-                            "exchange": selected.get("exchange"),
-                            "alert_id": selected.get("alert_id"),
-                            "tradingsymbol": selected.get("tradingsymbol"),
-                            "condition": selected.get("condition"),
-                            "order_type": selected.get("order_type"),
-                            "alert_price": new_trigger,
-                            "price": new_price,
-                            "quantity": new_qty
-                        }
-                        url = f"{BASE_URL}/gttmodify"
-                        resp = requests.post(url, headers={**HEADERS, "Content-Type": "application/json"}, json=data)
+            st.dataframe(df, use_container_width=True)
+            for i, o in enumerate(orders):
+                exp = st.expander(f"GTT: {o.get('tradingsymbol')} | {o.get('alert_id')}")
+                with exp:
+                    st.json(o)
+                    col1, col2 = st.columns(2)
+                    if col1.button("Modify", key=f"gttmod_{i}"):
+                        is_oco = any([o.get(f) for f in ("stoploss_price", "stoploss_trigger", "target_price", "target_trigger")])
+                        if is_oco:
+                            new_target_trigger = st.text_input("Target Trigger", value=str(o.get('target_trigger', '')), key=f"tgttrig_{i}")
+                            new_target_price = st.text_input("Target Price", value=str(o.get('target_price', '')), key=f"tgtpr_{i}")
+                            new_stoploss_trigger = st.text_input("Stoploss Trigger", value=str(o.get('stoploss_trigger', '')), key=f"sltrig_{i}")
+                            new_stoploss_price = st.text_input("Stoploss Price", value=str(o.get('stoploss_price', '')), key=f"slpr_{i}")
+                            new_target_qty = st.text_input("Target Qty", value=str(o.get('target_quantity', '')), key=f"tgtqty_{i}")
+                            new_stoploss_qty = st.text_input("Stoploss Qty", value=str(o.get('stoploss_quantity', '')), key=f"slqty_{i}")
+                            if st.button("Modify OCO", key=f"gttmodbtn_{i}"):
+                                data = {
+                                    "tradingsymbol": o.get("tradingsymbol"),
+                                    "exchange": o.get("exchange"),
+                                    "order_type": o.get("order_type"),
+                                    "target_quantity": new_target_qty,
+                                    "stoploss_quantity": new_stoploss_qty,
+                                    "target_price": new_target_price,
+                                    "stoploss_price": new_stoploss_price,
+                                    "alert_id": o.get("alert_id"),
+                                    "remarks": "modified by Streamlit",
+                                    "product_type": o.get("product_type", "CNC"),
+                                }
+                                url = f"{BASE_URL}/ocomodify"
+                                resp = requests.post(url, headers={**HEADERS, "Content-Type": "application/json"}, json=data)
+                                st.write(resp.json())
+                        else:
+                            new_trigger = st.text_input("Trigger Price", value=str(o.get('trigger_price', '')), key=f"gtttrig_{i}")
+                            new_price = st.text_input("Order Price", value=str(o.get('price', '')), key=f"gttpr_{i}")
+                            new_qty = st.text_input("Quantity", value=str(o.get('quantity', '')), key=f"gttqty_{i}")
+                            if st.button("Modify GTT", key=f"gttmodbtn_s_{i}"):
+                                data = {
+                                    "exchange": o.get("exchange"),
+                                    "alert_id": o.get("alert_id"),
+                                    "tradingsymbol": o.get("tradingsymbol"),
+                                    "condition": o.get("condition"),
+                                    "order_type": o.get("order_type"),
+                                    "alert_price": new_trigger,
+                                    "price": new_price,
+                                    "quantity": new_qty
+                                }
+                                url = f"{BASE_URL}/gttmodify"
+                                resp = requests.post(url, headers={**HEADERS, "Content-Type": "application/json"}, json=data)
+                                st.write(resp.json())
+                    if col2.button("Cancel", key=f"gttcxl_{i}"):
+                        alert_id = o.get("alert_id")
+                        is_oco = any([o.get(f) for f in ("stoploss_price", "stoploss_trigger", "target_price", "target_trigger")])
+                        if is_oco:
+                            url = f"{BASE_URL}/ococancel/{alert_id}"
+                        else:
+                            url = f"{BASE_URL}/gttcancel/{alert_id}"
+                        resp = requests.get(url, headers=HEADERS)
                         st.write(resp.json())
     except Exception as e:
         st.error(f"Failed to fetch GTT order book: {e}")
