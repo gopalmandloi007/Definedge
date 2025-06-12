@@ -20,23 +20,34 @@ def fetch_positions():
     response.raise_for_status()
     return response.json()
 
-def fetch_ltp(exchange, token):
-    url = f"{BASE_URL}/quotes/{exchange}/{token}"
+def fetch_ltp(exchange, tradingsymbol):
+    # Mapping for symbol to token -- you may want to cache/fetch this mapping from your master
+    symbol_token_map = {
+        "TEXRAIL-EQ": "5489",
+        "SBIN-EQ": "3045",
+        # Add more as needed
+    }
+    token = symbol_token_map.get(tradingsymbol)
+    if not token:
+        return "-"
+    exg = "NSE" if str(exchange).upper().startswith("N") else "BSE"
+    url = f"{BASE_URL}/quotes/{exg}/{token}"
     try:
-        response = requests.get(url, headers=get_headers())
+        response = requests.get(url, headers=get_headers(), timeout=10)
         response.raise_for_status()
         data = response.json()
-        ltp = data.get("ltp", "-")
+        ltp = data.get('ltp', "-")
         return ltp
     except Exception:
         return "-"
 
-def place_sell_order(data):
+def place_sell_order(order_kwargs):
     url = f"{BASE_URL}/placeorder"
     response = requests.post(
         url,
         headers={**get_headers(), "Content-Type": "application/json"},
-        json=data
+        json=order_kwargs,
+        timeout=15
     )
     try:
         json_resp = response.json()
@@ -44,6 +55,8 @@ def place_sell_order(data):
         json_resp = None
     return {
         "status_code": response.status_code,
+        "reason": response.reason,
+        "headers": dict(response.headers),
         "raw_text": response.text,
         "json": json_resp
     }
@@ -82,6 +95,33 @@ def flatten_positions(raw_positions):
         })
     return flat
 
+def resolve_shortcuts(order_params):
+    # Convert CLI style short codes to API expected values
+    exg = str(order_params['exchange']).strip().upper()
+    if exg in ("N", "NSE"):
+        order_params['exchange'] = "NSE"
+    elif exg in ("B", "BSE"):
+        order_params['exchange'] = "BSE"
+
+    ot = str(order_params['order_type']).strip().upper()
+    if ot in ("B", "BUY"):
+        order_params['order_type'] = "BUY"
+    elif ot in ("S", "SELL"):
+        order_params['order_type'] = "SELL"
+
+    pt = str(order_params['price_type']).strip().upper()
+    if pt in ("L", "LIMIT"):
+        order_params['price_type'] = "LIMIT"
+    elif pt in ("M", "MARKET"):
+        order_params['price_type'] = "MARKET"
+
+    val = str(order_params.get('validity', "")).strip().upper()
+    if val in ("D", "DAY"):
+        order_params['validity'] = "DAY"
+    elif val in ("I", "IOC"):
+        order_params['validity'] = "IOC"
+    return order_params
+
 st.set_page_config(page_title="Exit Order", layout="wide")
 st.title("Exit Direct from Holding / Position")
 
@@ -109,38 +149,37 @@ if tab == "Holdings (NSE only)":
         with col2:
             if st.button(f"Exit ({row['tradingsymbol']})", key=f"exit_h_{i}"):
                 with st.form(f"form_exit_h_{i}", clear_on_submit=True):
-                    ltp = fetch_ltp(row["exchange"], row["token"])
                     qty = st.number_input("Enter quantity to SELL", min_value=1, max_value=int(float(row["dp_qty"])), value=int(float(row["dp_qty"])), key=f"qty_h_{i}")
                     order_type = st.selectbox("Order type", ["LIMIT", "MARKET"], key=f"ordertype_h_{i}")
                     price = "0"
+                    ltp = fetch_ltp(row["exchange"], row["tradingsymbol"])
                     if order_type == "LIMIT":
                         st.info(f"LTP (Last Traded Price): {ltp}")
                         price = st.text_input("Enter LIMIT price", value=str(ltp), key=f"price_h_{i}")
                     remarks = st.text_input("Remarks (optional)", key=f"remarks_h_{i}")
+
                     submitted = st.form_submit_button("Place this SELL order")
                     if submitted:
-                        order = {
+                        order_kwargs = {
                             "tradingsymbol": str(row["tradingsymbol"]),
-                            "exchange": str(row["exchange"]),
+                            "exchange": "NSE",
                             "order_type": "SELL",
-                            "quantity": str(qty),
+                            "quantity": int(qty),
                             "product_type": "CNC",
-                            "price_type": order_type.upper(),
+                            "price_type": "LIMIT" if order_type == "LIMIT" else "MARKET",
                             "validity": "DAY",
                             "disclosed_quantity": "0",
                             "price": str(price) if order_type == "LIMIT" else "0",
                             "remarks": remarks,
                         }
+                        order_kwargs = resolve_shortcuts(order_kwargs)
                         st.info("Outgoing Order Payload:")
-                        st.json(order)
-                        try:
-                            result = place_sell_order(order)
-                            st.success("Order API response below:")
-                            st.json(result)
-                            if not (isinstance(result.get("json"), dict) and ("order_id" in result.get("json", {}) or "status" in result.get("json", {}))):
-                                st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
-                        except Exception as e:
-                            st.error(f"Failed to place order: {e}")
+                        st.json(order_kwargs)
+                        result = place_sell_order(order_kwargs)
+                        st.success("Order API response below:")
+                        st.json(result)
+                        if not (isinstance(result.get("json"), dict) and ("order_id" in result["json"] or "status" in result["json"])):
+                            st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
 
 elif tab == "Positions":
     try:
@@ -164,37 +203,36 @@ elif tab == "Positions":
         with col2:
             if st.button(f"Exit ({row['tradingsymbol']})", key=f"exit_p_{i}"):
                 with st.form(f"form_exit_p_{i}", clear_on_submit=True):
-                    ltp = fetch_ltp(row["exchange"], row["token"])
                     max_qty = abs(int(float(row["net_quantity"])))
                     prd = row["product_type"]
                     qty = st.number_input("Enter quantity to SELL", min_value=1, max_value=max_qty, value=max_qty, key=f"qty_p_{i}")
                     order_type = st.selectbox("Order type", ["LIMIT", "MARKET"], key=f"ordertype_p_{i}")
                     price = "0"
+                    ltp = fetch_ltp(row["exchange"], row["tradingsymbol"])
                     if order_type == "LIMIT":
                         st.info(f"LTP (Last Traded Price): {ltp}")
                         price = st.text_input("Enter LIMIT price", value=str(ltp), key=f"price_p_{i}")
                     remarks = st.text_input("Remarks (optional)", key=f"remarks_p_{i}")
+
                     submitted = st.form_submit_button("Place this SELL order")
                     if submitted:
-                        order = {
+                        order_kwargs = {
                             "tradingsymbol": str(row["tradingsymbol"]),
-                            "exchange": str(row["exchange"]),
+                            "exchange": "NSE",
                             "order_type": "SELL",
-                            "quantity": str(qty),
+                            "quantity": int(qty),
                             "product_type": prd,
-                            "price_type": order_type.upper(),
+                            "price_type": "LIMIT" if order_type == "LIMIT" else "MARKET",
                             "validity": "DAY",
                             "disclosed_quantity": "0",
                             "price": str(price) if order_type == "LIMIT" else "0",
                             "remarks": remarks,
                         }
+                        order_kwargs = resolve_shortcuts(order_kwargs)
                         st.info("Outgoing Order Payload:")
-                        st.json(order)
-                        try:
-                            result = place_sell_order(order)
-                            st.success("Order API response below:")
-                            st.json(result)
-                            if not (isinstance(result.get("json"), dict) and ("order_id" in result.get("json", {}) or "status" in result.get("json", {}))):
-                                st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
-                        except Exception as e:
-                            st.error(f"Failed to place order: {e}")
+                        st.json(order_kwargs)
+                        result = place_sell_order(order_kwargs)
+                        st.success("Order API response below:")
+                        st.json(result)
+                        if not (isinstance(result.get("json"), dict) and ("order_id" in result["json"] or "status" in result["json"])):
+                            st.warning("Order may not have been placed successfully. Please check order book for status or errors.")
